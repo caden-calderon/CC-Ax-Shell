@@ -1,7 +1,10 @@
 {
-	"version": "0.0.54", 
-  "pkg_update": false,
-	"changelog": [
-    "<b>fix:</b> Brightness slider not working on scroll (<a href='https://github.com/Axenide/Ax-Shell/pull/302'>#302</a>)"
+  "version": "0.0.58",
+  "pkg_update": true,
+  "changelog": [
+    "<b>fix:</b> swww changed to awww.",
+    "<b>fix:</b> Bar hiding only on one monitor. (<a href='https://github.com/Axenide/Ax-Shell/pull/309'>#309</a>)",
+    "<b>fix:</b> awwiw's exec-once to exec.",
+    "<b>fix:</b> ddcutil support (<a href='https://github.com/Axenide/Ax-Shell/pull/211'>#211</a>)"
   ]
 }
