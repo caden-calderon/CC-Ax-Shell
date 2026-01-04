@@ -28,11 +28,12 @@ class VolumeSlider(Scale):
         self.audio.connect("notify::speaker", self.on_new_speaker)
         if self.audio.speaker:
             self.audio.speaker.connect("changed", self.on_speaker_changed)
-        self.connect("value-changed", self.on_value_changed)
+        self.connect("change-value", self.on_change_value)
         self.add_style_class("vol")
         self._pending_value = None
         self._update_source_id = None
         self._debounce_timeout = 100
+        self._updating_from_audio = False
         self.on_speaker_changed()
 
     def on_new_speaker(self, *args):
@@ -40,12 +41,17 @@ class VolumeSlider(Scale):
             self.audio.speaker.connect("changed", self.on_speaker_changed)
             self.on_speaker_changed()
 
-    def on_value_changed(self, _):
+    def on_change_value(self, widget, scroll, value):
+        if self._updating_from_audio:
+            return False
         if self.audio.speaker:
-            self._pending_value = self.value * 100
+            self._pending_value = value * 100
             if self._update_source_id is not None:
                 GLib.source_remove(self._update_source_id)
-            self._update_source_id = GLib.timeout_add(self._debounce_timeout, self._update_volume_callback)
+            self._update_source_id = GLib.timeout_add(
+                self._debounce_timeout, self._update_volume_callback
+            )
+        return False
 
     def _update_volume_callback(self):
         if self._pending_value is not None and self.audio.speaker:
@@ -57,12 +63,15 @@ class VolumeSlider(Scale):
     def on_speaker_changed(self, *_):
         if not self.audio.speaker:
             return
+        self._updating_from_audio = True
         self.value = self.audio.speaker.volume / 100
-        
+        self._updating_from_audio = False
+
         if self.audio.speaker.muted:
             self.add_style_class("muted")
         else:
             self.remove_style_class("muted")
+
 
 class MicSlider(Scale):
     def __init__(self, **kwargs):
@@ -78,8 +87,9 @@ class MicSlider(Scale):
         self.audio.connect("notify::microphone", self.on_new_microphone)
         if self.audio.microphone:
             self.audio.microphone.connect("changed", self.on_microphone_changed)
-        self.connect("value-changed", self.on_value_changed)
+        self.connect("change-value", self.on_change_value)
         self.add_style_class("mic")
+        self._updating_from_audio = False
         self.on_microphone_changed()
 
     def on_new_microphone(self, *args):
@@ -87,20 +97,25 @@ class MicSlider(Scale):
             self.audio.microphone.connect("changed", self.on_microphone_changed)
             self.on_microphone_changed()
 
-    def on_value_changed(self, _):
+    def on_change_value(self, widget, scroll, value):
+        if self._updating_from_audio:
+            return False
         if self.audio.microphone:
-            self.audio.microphone.volume = self.value * 100
+            self.audio.microphone.volume = value * 100
+        return False
 
     def on_microphone_changed(self, *_):
         if not self.audio.microphone:
             return
+        self._updating_from_audio = True
         self.value = self.audio.microphone.volume / 100
-        
+        self._updating_from_audio = False
 
         if self.audio.microphone.muted:
             self.add_style_class("muted")
         else:
             self.remove_style_class("muted")
+
 
 class BrightnessSlider(Scale):
     def __init__(self, **kwargs):
@@ -135,7 +150,9 @@ class BrightnessSlider(Scale):
         self._pending_value = moved_pos
         if self._update_source_id is not None:
             GLib.source_remove(self._update_source_id)
-        self._update_source_id = GLib.timeout_add(self._debounce_timeout, self._update_brightness_callback)
+        self._update_source_id = GLib.timeout_add(
+            self._debounce_timeout, self._update_brightness_callback
+        )
         return False
 
     def _update_brightness_callback(self):
@@ -162,6 +179,7 @@ class BrightnessSlider(Scale):
             GLib.source_remove(self._update_source_id)
         super().destroy()
 
+
 class BrightnessSmall(Box):
     def __init__(self, **kwargs):
         super().__init__(name="button-bar-brightness", **kwargs)
@@ -171,17 +189,19 @@ class BrightnessSmall(Box):
             return
 
         self.progress_bar = CircularProgressBar(
-            name="button-brightness", size=28, line_width=2,
-            start_angle=150, end_angle=390,
+            name="button-brightness",
+            size=28,
+            line_width=2,
+            start_angle=150,
+            end_angle=390,
         )
-        self.brightness_label = Label(name="brightness-label", markup=icons.brightness_high)
+        self.brightness_label = Label(
+            name="brightness-label", markup=icons.brightness_high
+        )
         self.brightness_button = Button(child=self.brightness_label)
         self.event_box = EventBox(
             events=["scroll", "smooth-scroll"],
-            child=Overlay(
-                child=self.progress_bar,
-                overlays=self.brightness_button
-            ),
+            child=Overlay(child=self.progress_bar, overlays=self.brightness_button),
         )
         self.event_box.connect("scroll-event", self.on_scroll)
         self.add(self.event_box)
@@ -192,7 +212,7 @@ class BrightnessSmall(Box):
         self._update_source_id = None
         self._debounce_timeout = 100
 
-        self.progress_bar.connect("notify::value", self.on_progress_value_changed)
+        # Don't connect to progress_bar value changes - only use scroll events
         self.brightness.connect("screen", self.on_brightness_changed)
         self.on_brightness_changed()
 
@@ -201,27 +221,30 @@ class BrightnessSmall(Box):
             return
 
         step_size = 5
-        current_norm = self.progress_bar.value
+        current_brightness = self.brightness.screen_brightness
+
         if event.delta_y < 0:
-            new_norm = min(current_norm + (step_size / self.brightness.max_screen), 1)
+            new_brightness = min(
+                current_brightness + step_size, self.brightness.max_screen
+            )
         elif event.delta_y > 0:
-            new_norm = max(current_norm - (step_size / self.brightness.max_screen), 0)
+            new_brightness = max(current_brightness - step_size, 0)
         else:
             return
-        self.progress_bar.value = new_norm
 
-    def on_progress_value_changed(self, widget, pspec):
-        if self._updating_from_brightness:
-            return
-        new_norm = widget.value
-        new_brightness = int(new_norm * self.brightness.max_screen)
+        # Directly update brightness, don't touch progress_bar
         self._pending_value = new_brightness
         if self._update_source_id is not None:
             GLib.source_remove(self._update_source_id)
-        self._update_source_id = GLib.timeout_add(self._debounce_timeout, self._update_brightness_callback)
+        self._update_source_id = GLib.timeout_add(
+            self._debounce_timeout, self._update_brightness_callback
+        )
 
     def _update_brightness_callback(self):
-        if self._pending_value is not None and self._pending_value != self.brightness.screen_brightness:
+        if (
+            self._pending_value is not None
+            and self._pending_value != self.brightness.screen_brightness
+        ):
             self.brightness.screen_brightness = self._pending_value
             self._pending_value = None
         self._update_source_id = None
@@ -230,7 +253,11 @@ class BrightnessSmall(Box):
     def on_brightness_changed(self, *args):
         if self.brightness.max_screen == -1:
             return
-        normalized = self.brightness.screen_brightness / self.brightness.max_screen
+        normalized = (
+            self.brightness.screen_brightness / self.brightness.max_screen
+            if self.brightness.max_screen > 0
+            else 0
+        )
         self._updating_from_brightness = True
         self.progress_bar.value = normalized
         self._updating_from_brightness = False
@@ -249,13 +276,17 @@ class BrightnessSmall(Box):
             GLib.source_remove(self._update_source_id)
         super().destroy()
 
+
 class VolumeSmall(Box):
     def __init__(self, **kwargs):
         super().__init__(name="button-bar-vol", **kwargs)
         self.audio = Audio()
         self.progress_bar = CircularProgressBar(
-            name="button-volume", size=28, line_width=2,
-            start_angle=150, end_angle=390,
+            name="button-volume",
+            size=28,
+            line_width=2,
+            start_angle=150,
+            end_angle=390,
         )
         self.vol_label = Label(name="vol-label", markup=icons.vol_high)
         self.vol_button = Button(on_clicked=self.toggle_mute, child=self.vol_label)
@@ -301,7 +332,7 @@ class VolumeSmall(Box):
     def on_speaker_changed(self, *_):
         if not self.audio.speaker:
             return
-        
+
         vol_high_icon = icons.vol_high
         vol_medium_icon = icons.vol_medium
         vol_mute_icon = icons.vol_off
@@ -314,7 +345,7 @@ class VolumeSmall(Box):
             vol_off_icon = icons.bluetooth_disconnected
 
         self.progress_bar.value = self.audio.speaker.volume / 100
-        
+
         if self.audio.speaker.muted:
             self.vol_button.get_child().set_markup(vol_mute_icon)
             self.progress_bar.add_style_class("muted")
@@ -332,13 +363,17 @@ class VolumeSmall(Box):
         else:
             self.vol_button.get_child().set_markup(vol_off_icon)
 
+
 class MicSmall(Box):
     def __init__(self, **kwargs):
         super().__init__(name="button-bar-mic", **kwargs)
         self.audio = Audio()
         self.progress_bar = CircularProgressBar(
-            name="button-mic", size=28, line_width=2,
-            start_angle=150, end_angle=390,
+            name="button-mic",
+            size=28,
+            line_width=2,
+            start_angle=150,
+            end_angle=390,
         )
         self.mic_label = Label(name="mic-label", markup=icons.mic)
         self.mic_button = Button(on_clicked=self.toggle_mute, child=self.mic_label)
@@ -400,6 +435,7 @@ class MicSmall(Box):
         else:
             self.mic_button.get_child().set_markup(icons.mic_mute)
 
+
 class BrightnessIcon(Box):
     def __init__(self, **kwargs):
         super().__init__(name="brightness-icon", **kwargs)
@@ -407,73 +443,94 @@ class BrightnessIcon(Box):
         if self.brightness.screen_brightness == -1:
             self.destroy()
             return
-            
-        self.brightness_label = Label(name="brightness-label-dash", markup=icons.brightness_high, h_align="center", v_align="center", h_expand=True, v_expand=True)
-        self.brightness_button = Button(child=self.brightness_label, h_align="center", v_align="center", h_expand=True, v_expand=True)
-        
+
+        self.brightness_label = Label(
+            name="brightness-label-dash",
+            markup=icons.brightness_high,
+            h_align="center",
+            v_align="center",
+            h_expand=True,
+            v_expand=True,
+        )
+        self.brightness_button = Button(
+            child=self.brightness_label,
+            h_align="center",
+            v_align="center",
+            h_expand=True,
+            v_expand=True,
+        )
 
         self.event_box = EventBox(
             events=["scroll", "smooth-scroll"],
             child=self.brightness_button,
-            h_align="center", 
-            v_align="center", 
-            h_expand=True, 
-            v_expand=True
+            h_align="center",
+            v_align="center",
+            h_expand=True,
+            v_expand=True,
         )
         self.event_box.connect("scroll-event", self.on_scroll)
         self.add(self.event_box)
-        
+
         self._pending_value = None
         self._update_source_id = None
         self._updating_from_brightness = False
-        
+
         self.brightness.connect("screen", self.on_brightness_changed)
         self.on_brightness_changed()
         self.add_events(Gdk.EventMask.SCROLL_MASK | Gdk.EventMask.SMOOTH_SCROLL_MASK)
-    
+
     def on_scroll(self, _, event):
         if self.brightness.max_screen == -1:
             return
-            
+
         step_size = 5
         current_brightness = self.brightness.screen_brightness
-        
+
         if event.direction == Gdk.ScrollDirection.SMOOTH:
             if event.delta_y < 0:
-                new_brightness = min(current_brightness + step_size, self.brightness.max_screen)
+                new_brightness = min(
+                    current_brightness + step_size, self.brightness.max_screen
+                )
             elif event.delta_y > 0:
                 new_brightness = max(current_brightness - step_size, 0)
             else:
                 return
         else:
             if event.direction == Gdk.ScrollDirection.UP:
-                new_brightness = min(current_brightness + step_size, self.brightness.max_screen)
+                new_brightness = min(
+                    current_brightness + step_size, self.brightness.max_screen
+                )
             elif event.direction == Gdk.ScrollDirection.DOWN:
                 new_brightness = max(current_brightness - step_size, 0)
             else:
                 return
-        
+
         self._pending_value = new_brightness
         if self._update_source_id is None:
-            self._update_source_id = GLib.timeout_add(100, self._update_brightness_callback)
-    
+            self._update_source_id = GLib.timeout_add(
+                100, self._update_brightness_callback
+            )
+
     def _update_brightness_callback(self):
-        if self._pending_value is not None and self._pending_value != self.brightness.screen_brightness:
+        if (
+            self._pending_value is not None
+            and self._pending_value != self.brightness.screen_brightness
+        ):
             self.brightness.screen_brightness = self._pending_value
             self._pending_value = None
             return True
         else:
             self._update_source_id = None
             return False
-    
+
     def on_brightness_changed(self, *args):
         if self.brightness.max_screen == -1:
             return
-            
+
         self._updating_from_brightness = True
         normalized = self.brightness.screen_brightness / self.brightness.max_screen
         brightness_percentage = int(normalized * 100)
-        
+
         if brightness_percentage >= 75:
             self.brightness_label.set_markup("󰃠")
         elif brightness_percentage >= 24:
@@ -482,19 +539,34 @@ class BrightnessIcon(Box):
             self.brightness_label.set_markup("󰃠")
         self.set_tooltip_text(f"{brightness_percentage}%")
         self._updating_from_brightness = False
-        
+
     def destroy(self):
         if self._update_source_id is not None:
             GLib.source_remove(self._update_source_id)
         super().destroy()
+
 
 class VolumeIcon(Box):
     def __init__(self, **kwargs):
         super().__init__(name="vol-icon", **kwargs)
         self.audio = Audio()
 
-        self.vol_label = Label(name="vol-label-dash", markup="", h_align="center", v_align="center", h_expand=True, v_expand=True)
-        self.vol_button = Button(on_clicked=self.toggle_mute, child=self.vol_label, h_align="center", v_align="center", h_expand=True, v_expand=True)
+        self.vol_label = Label(
+            name="vol-label-dash",
+            markup="",
+            h_align="center",
+            v_align="center",
+            h_expand=True,
+            v_expand=True,
+        )
+        self.vol_button = Button(
+            on_clicked=self.toggle_mute,
+            child=self.vol_label,
+            h_align="center",
+            v_align="center",
+            h_expand=True,
+            v_expand=True,
+        )
 
         self.event_box = EventBox(
             events=["scroll", "smooth-scroll"],
@@ -502,7 +574,7 @@ class VolumeIcon(Box):
             h_align="center",
             v_align="center",
             h_expand=True,
-            v_expand=True
+            v_expand=True,
         )
         self.event_box.connect("scroll-event", self.on_scroll)
         self.add(self.event_box)
@@ -515,16 +587,18 @@ class VolumeIcon(Box):
         if self.audio.speaker:
             self.audio.speaker.connect("changed", self.on_speaker_changed)
 
-        self._periodic_update_source_id = GLib.timeout_add_seconds(2, self.update_device_icon)
+        self._periodic_update_source_id = GLib.timeout_add_seconds(
+            2, self.update_device_icon
+        )
         self.add_events(Gdk.EventMask.SCROLL_MASK | Gdk.EventMask.SMOOTH_SCROLL_MASK)
 
     def on_scroll(self, _, event):
         if not self.audio.speaker:
             return
-            
+
         step_size = 5
         current_volume = self.audio.speaker.volume
-        
+
         if event.direction == Gdk.ScrollDirection.SMOOTH:
             if event.delta_y < 0:
                 new_volume = min(current_volume + step_size, 100)
@@ -539,25 +613,28 @@ class VolumeIcon(Box):
                 new_volume = max(current_volume - step_size, 0)
             else:
                 return
-                
+
         self._pending_value = new_volume
         if self._update_source_id is None:
             self._update_source_id = GLib.timeout_add(100, self._update_volume_callback)
-            
+
     def _update_volume_callback(self):
-        if self._pending_value is not None and self._pending_value != self.audio.speaker.volume:
+        if (
+            self._pending_value is not None
+            and self._pending_value != self.audio.speaker.volume
+        ):
             self.audio.speaker.volume = self._pending_value
             self._pending_value = None
             return True
         else:
             self._update_source_id = None
             return False
-            
+
     def on_new_speaker(self, *args):
         if self.audio.speaker:
             self.audio.speaker.connect("changed", self.on_speaker_changed)
             self.on_speaker_changed()
-            
+
     def toggle_mute(self, event):
         current_stream = self.audio.speaker
         if current_stream:
@@ -567,7 +644,6 @@ class VolumeIcon(Box):
 
     def on_speaker_changed(self, *_):
         if not self.audio.speaker:
-
             self.vol_label.set_markup("")
             self.remove_style_class("muted")
             self.vol_label.remove_style_class("muted")
@@ -590,29 +666,24 @@ class VolumeIcon(Box):
             self.set_tooltip_text(f"{round(self.audio.speaker.volume)}%")
 
     def update_device_icon(self):
-
         if not self.audio.speaker:
-
             self.vol_label.set_markup("")
 
             return True
 
         if self.audio.speaker.muted:
-             return True
+            return True
 
         try:
-
             device_type = self.audio.speaker.port.type
-            if device_type == 'headphones':
+            if device_type == "headphones":
                 self.vol_label.set_markup(icons.headphones)
-            elif device_type == 'speaker':
+            elif device_type == "speaker":
                 self.vol_label.set_markup(icons.headphones)
             else:
-
-                 self.vol_label.set_markup(icons.headphones)
+                self.vol_label.set_markup(icons.headphones)
 
         except AttributeError:
-
             self.vol_label.set_markup(icons.headphones)
 
         return True
@@ -621,46 +692,63 @@ class VolumeIcon(Box):
         if self._update_source_id is not None:
             GLib.source_remove(self._update_source_id)
 
-        if hasattr(self, '_periodic_update_source_id') and self._periodic_update_source_id is not None:
+        if (
+            hasattr(self, "_periodic_update_source_id")
+            and self._periodic_update_source_id is not None
+        ):
             GLib.source_remove(self._periodic_update_source_id)
         super().destroy()
+
 
 class MicIcon(Box):
     def __init__(self, **kwargs):
         super().__init__(name="mic-icon", **kwargs)
         self.audio = Audio()
-        
-        self.mic_label = Label(name="mic-label-dash", markup=icons.mic, h_align="center", v_align="center", h_expand=True, v_expand=True)
-        self.mic_button = Button(on_clicked=self.toggle_mute, child=self.mic_label, h_align="center", v_align="center", h_expand=True, v_expand=True)
-        
+
+        self.mic_label = Label(
+            name="mic-label-dash",
+            markup=icons.mic,
+            h_align="center",
+            v_align="center",
+            h_expand=True,
+            v_expand=True,
+        )
+        self.mic_button = Button(
+            on_clicked=self.toggle_mute,
+            child=self.mic_label,
+            h_align="center",
+            v_align="center",
+            h_expand=True,
+            v_expand=True,
+        )
 
         self.event_box = EventBox(
             events=["scroll", "smooth-scroll"],
             child=self.mic_button,
-            h_align="center", 
-            v_align="center", 
-            h_expand=True, 
-            v_expand=True
+            h_align="center",
+            v_align="center",
+            h_expand=True,
+            v_expand=True,
         )
         self.event_box.connect("scroll-event", self.on_scroll)
         self.add(self.event_box)
-        
+
         self._pending_value = None
         self._update_source_id = None
-        
+
         self.audio.connect("notify::microphone", self.on_new_microphone)
         if self.audio.microphone:
             self.audio.microphone.connect("changed", self.on_microphone_changed)
         self.on_microphone_changed()
         self.add_events(Gdk.EventMask.SCROLL_MASK | Gdk.EventMask.SMOOTH_SCROLL_MASK)
-        
+
     def on_scroll(self, _, event):
         if not self.audio.microphone:
             return
-            
+
         step_size = 5
         current_volume = self.audio.microphone.volume
-        
+
         if event.direction == Gdk.ScrollDirection.SMOOTH:
             if event.delta_y < 0:
                 new_volume = min(current_volume + step_size, 100)
@@ -675,25 +763,28 @@ class MicIcon(Box):
                 new_volume = max(current_volume - step_size, 0)
             else:
                 return
-                
+
         self._pending_value = new_volume
         if self._update_source_id is None:
             self._update_source_id = GLib.timeout_add(100, self._update_volume_callback)
-            
+
     def _update_volume_callback(self):
-        if self._pending_value is not None and self._pending_value != self.audio.microphone.volume:
+        if (
+            self._pending_value is not None
+            and self._pending_value != self.audio.microphone.volume
+        ):
             self.audio.microphone.volume = self._pending_value
             self._pending_value = None
             return True
         else:
             self._update_source_id = None
             return False
-            
+
     def on_new_microphone(self, *args):
         if self.audio.microphone:
             self.audio.microphone.connect("changed", self.on_microphone_changed)
             self.on_microphone_changed()
-            
+
     def toggle_mute(self, event):
         current_stream = self.audio.microphone
         if current_stream:
@@ -706,7 +797,7 @@ class MicIcon(Box):
                 self.on_microphone_changed()
                 self.mic_label.remove_style_class("muted")
                 self.mic_button.remove_style_class("muted")
-                
+
     def on_microphone_changed(self, *_):
         if not self.audio.microphone:
             return
@@ -719,17 +810,18 @@ class MicIcon(Box):
         else:
             self.remove_style_class("muted")
             self.mic_label.remove_style_class("muted")
-            
+
         self.set_tooltip_text(f"{round(self.audio.microphone.volume)}%")
         if self.audio.microphone.volume >= 1:
             self.mic_button.get_child().set_markup("")
         else:
             self.mic_button.get_child().set_markup("")
-            
+
     def destroy(self):
         if self._update_source_id is not None:
             GLib.source_remove(self._update_source_id)
         super().destroy()
+
 
 class ControlSliders(Box):
     def __init__(self, **kwargs):
@@ -739,33 +831,35 @@ class ControlSliders(Box):
             spacing=8,
             **kwargs,
         )
-        
-        brightness = Brightness.get_initial()
-        
 
-        if (brightness.screen_brightness != -1):
-            brightness_row = Box(orientation="h", spacing=0, h_expand=True, h_align="fill")
+        brightness = Brightness.get_initial()
+
+        if brightness.screen_brightness != -1:
+            brightness_row = Box(
+                orientation="h", spacing=0, h_expand=True, h_align="fill"
+            )
             brightness_row.add(BrightnessIcon())
             brightness_row.add(BrightnessSlider())
             self.add(brightness_row)
-            
+
         volume_row = Box(orientation="h", spacing=0, h_expand=True, h_align="fill")
         volume_row.add(VolumeIcon())
         volume_row.add(VolumeSlider())
         self.add(volume_row)
-        
+
         mic_row = Box(orientation="h", spacing=0, h_expand=True, h_align="fill")
         mic_row.add(MicIcon())
         mic_row.add(MicSlider())
         self.add(mic_row)
-        
+
         self.show_all()
+
 
 class ControlSmall(Box):
     def __init__(self, **kwargs):
         brightness = Brightness.get_initial()
         children = []
-        if (brightness.screen_brightness != -1):
+        if brightness.screen_brightness != -1:
             children.append(BrightnessSmall())
         children.extend([VolumeSmall(), MicSmall()])
         super().__init__(
